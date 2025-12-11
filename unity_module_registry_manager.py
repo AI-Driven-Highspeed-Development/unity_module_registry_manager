@@ -1,17 +1,13 @@
-import os
-import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import yaml
+from yaml import YAMLError
 
-project_root = os.getcwd()
-sys.path.insert(0, project_root)
-
-from cores.exceptions_core import ADHDError
-from utils.logger_util import Logger
+from cores.exceptions_core.adhd_exceptions import ADHDError
+from utils.logger_util.logger import Logger
 
 
 @dataclass
@@ -99,12 +95,11 @@ class UnityModuleRegistryManager:
         """Attempt to read Unity project path from .config file."""
         try:
             from managers.config_manager import cm
-            unity_config = cm.raw_config.get("unity_module_registry", {})
-            path_str = unity_config.get("unity_project_path")
+            path_str = cm.config.unity_module_registry_manager.path.unity_project
             if path_str:
                 return Path(path_str).resolve()
-        except Exception as e:
-            self.logger.debug(f"Could not read unity_project_path from config: {e}")
+        except (AttributeError, ImportError) as e:
+            self.logger.debug(f"Could not read unity_project from config: {e}")
         return None
     
     def _load_registry(self) -> None:
@@ -137,8 +132,9 @@ class UnityModuleRegistryManager:
                 self.modules.append(module)
             
             self.logger.debug(f"Loaded {len(self.modules)} modules from registry")
-        except Exception as e:
-            self.logger.error(f"Failed to load registry: {e}")
+        except (OSError, YAMLError, ValueError, KeyError) as e:
+            self.logger.warning(f"Failed to load registry, starting fresh: {e}")
+            self.modules = []
     
     def scan_modules(self) -> list[UnityModule]:
         """
@@ -212,7 +208,7 @@ class UnityModuleRegistryManager:
                 module.description = yaml_data.get("description")
                 module.dependencies = yaml_data.get("dependencies", [])
                 module.assembly = yaml_data.get("assembly")
-            except Exception as e:
+            except (OSError, YAMLError) as e:
                 self.logger.warning(f"Failed to parse module.yaml for {folder.name}: {e}")
         
         return module
@@ -242,8 +238,8 @@ class UnityModuleRegistryManager:
             with open(self.registry_path, "w") as f:
                 yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
             self.logger.debug(f"Registry saved to {self.registry_path}")
-        except Exception as e:
-            raise UnityModuleRegistryError(f"Failed to save registry: {e}")
+        except OSError as e:
+            raise UnityModuleRegistryError(f"Failed to save registry: {e}") from e
     
     def get_modules(self, module_type: Optional[str] = None) -> list[UnityModule]:
         """
@@ -254,8 +250,16 @@ class UnityModuleRegistryManager:
         
         Returns:
             List of matching modules.
+        
+        Raises:
+            ValueError: If module_type is not a valid type.
         """
         if module_type:
+            valid_types = set(self.MODULE_TYPE_FOLDERS.values())
+            if module_type not in valid_types:
+                raise ValueError(
+                    f"Invalid module type '{module_type}'. Valid types: {sorted(valid_types)}"
+                )
             return [m for m in self.modules if m.type == module_type]
         return self.modules
     

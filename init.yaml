@@ -1,8 +1,8 @@
 version: 0.0.1
 type: manager
 repo_url: https://github.com/AI-Driven-Highspeed-Development/unity_module_registry_manager.git
-shows_in_workspace: true
 
 requirements:
 - https://github.com/AI-Driven-Highspeed-Development/Logger-Util.git
 - https://github.com/AI-Driven-Highspeed-Development/exceptions_core.git
+- https://github.com/AI-Driven-Highspeed-Development/config_manager.git

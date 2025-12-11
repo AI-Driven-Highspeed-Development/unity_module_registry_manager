@@ -1,5 +1,4 @@
-"""
-Unity Module Registry Manager
+"""Unity Module Registry Manager
 
 Scans Unity project folders and maintains a registry of discovered modules.
 Supports automatic detection of module types based on folder structure.
@@ -12,14 +11,22 @@ Usage:
     registry.save_registry()
 """
 
+# Add path handling to work from the new nested directory structure
 import os
 import sys
 
-project_root = os.getcwd()
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.getcwd()  # Use current working directory as project root
+sys.path.insert(0, project_root)
 
-try:
-    from .unity_module_registry_manager import UnityModuleRegistryManager
-except ImportError:
-    from unity_module_registry_manager import UnityModuleRegistryManager
+from managers.unity_module_registry_manager.unity_module_registry_manager import (
+    UnityModule,
+    UnityModuleRegistryError,
+    UnityModuleRegistryManager,
+)
+
+__all__ = [
+    "UnityModule",
+    "UnityModuleRegistryError",
+    "UnityModuleRegistryManager",
+]

@@ -1,0 +1,7 @@
+{
+    "module_name": "unity_module_registry_manager",
+    "path": {
+        "data": "./project/data/unity_module_registry_manager",
+        "unity_project": ""
+    }
+}

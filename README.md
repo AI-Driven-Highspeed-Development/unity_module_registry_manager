@@ -78,7 +78,7 @@ class UnityModuleRegistryManager:
 
 ## Notes
 - Registry is stored at `data/unity_module_registry.yaml` by default
-- If `unity_project_path` is not provided, attempts to read from `.config` under `unity_module_registry.unity_project_path`
+- If `unity_project_path` is not provided, attempts to read from `.config` under `unity_module_registry_manager.path.unity_project`
 - Module names default to folder names but can be overridden in `module.yaml`
 
 ## Requirements & prerequisites
