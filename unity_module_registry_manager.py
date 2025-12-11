@@ -1,3 +1,5 @@
+import re
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -70,7 +72,6 @@ class UnityModuleRegistryManager:
         
         if not self.unity_project_path:
             self.logger.warning("Unity project path not configured")
-            self.unity_project_path = None
         elif not self.unity_project_path.exists():
             self.logger.warning(f"Unity project path does not exist: {self.unity_project_path}")
         
@@ -78,7 +79,7 @@ class UnityModuleRegistryManager:
         if registry_path:
             self.registry_path = Path(registry_path)
         else:
-            self.registry_path = Path(__file__).parent / "data" / "unity_module_registry.yaml"
+            self.registry_path = self._get_registry_path_from_config()
         
         # Ensure data directory exists
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
@@ -102,6 +103,17 @@ class UnityModuleRegistryManager:
             self.logger.debug(f"Could not read unity_project from config: {e}")
         return None
     
+    def _get_registry_path_from_config(self) -> Path:
+        """Get registry file path from .config file."""
+        try:
+            from managers.config_manager import cm
+            data_dir = cm.config.unity_module_registry_manager.path.data
+            return Path(data_dir) / "unity_module_registry.yaml"
+        except (AttributeError, ImportError) as e:
+            self.logger.warning(f"Could not read data path from config, using fallback: {e}")
+            # Fallback to project/data pattern (ADHD framework convention)
+            return Path("project/data/unity_module_registry_manager/unity_module_registry.yaml")
+    
     def _load_registry(self) -> None:
         """Load existing registry from YAML file."""
         if not self.registry_path.exists():
@@ -117,9 +129,8 @@ class UnityModuleRegistryManager:
             if data.get("last_scan"):
                 self.last_scan = datetime.fromisoformat(data["last_scan"])
             
-            self.modules = []
-            for mod_data in data.get("modules", []):
-                module = UnityModule(
+            self.modules = [
+                UnityModule(
                     name=mod_data.get("name", ""),
                     type=mod_data.get("type", ""),
                     path=mod_data.get("path", ""),
@@ -129,7 +140,8 @@ class UnityModuleRegistryManager:
                     dependencies=mod_data.get("dependencies", []),
                     assembly=mod_data.get("assembly"),
                 )
-                self.modules.append(module)
+                for mod_data in data.get("modules", [])
+            ]
             
             self.logger.debug(f"Loaded {len(self.modules)} modules from registry")
         except (OSError, YAMLError, ValueError, KeyError) as e:
@@ -319,10 +331,7 @@ class UnityModuleRegistryManager:
         Returns:
             Dict with module counts by type and metadata.
         """
-        counts: dict[str, int] = {}
-        for module in self.modules:
-            counts[module.type] = counts.get(module.type, 0) + 1
-        
+        counts = dict(Counter(module.type for module in self.modules))
         modules_with_yaml = sum(1 for m in self.modules if m.has_yaml)
         
         return {
@@ -333,3 +342,146 @@ class UnityModuleRegistryManager:
             "last_scan": self.last_scan.isoformat() if self.last_scan else None,
             "project_path": str(self.unity_project_path) if self.unity_project_path else None,
         }
+    
+    def _sanitize_mermaid_id(self, name: str) -> str:
+        """Sanitize module name for valid Mermaid node IDs."""
+        # Replace spaces and special chars with underscores
+        sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+        # Ensure doesn't start with number
+        if sanitized and sanitized[0].isdigit():
+            sanitized = f"m_{sanitized}"
+        return sanitized or "unknown"
+    
+    def _get_orphaned_modules(self) -> list[UnityModule]:
+        """
+        Find modules that have no dependents and no dependencies.
+        
+        Returns:
+            List of orphaned modules.
+        """
+        orphans = []
+        for module in self.modules:
+            # Has no dependencies
+            has_no_deps = not module.dependencies
+            # No other module depends on it
+            dependents = self.find_dependents(module.name)
+            has_no_dependents = len(dependents) == 0
+            
+            if has_no_deps and has_no_dependents:
+                orphans.append(module)
+        return orphans
+    
+    def generate_report(self) -> dict:
+        """
+        Generate a markdown report from the registry data.
+        
+        Creates a comprehensive markdown document with:
+        1. Module count by type
+        2. Dependency graph (Mermaid)
+        3. Modules missing module.yaml
+        4. Orphaned modules (no dependents/dependencies)
+        
+        Returns:
+            Dict with success status and report_path.
+        """
+        # Get report output path from config (same directory as registry)
+        report_path = self.registry_path.parent / "registry_report.md"
+        
+        # Build report content
+        lines: list[str] = []
+        
+        # Header
+        lines.append("# Unity Module Registry Report")
+        lines.append("")
+        lines.append(f"> Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        if self.last_scan:
+            lines.append(f"> Last Scan: {self.last_scan.strftime('%Y-%m-%d %H:%M:%S')}")
+        if self.unity_project_path:
+            lines.append(f"> Project: `{self.unity_project_path}`")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        
+        # Section 1: Module Counts by Type
+        lines.append("## Module Counts by Type")
+        lines.append("")
+        counts = Counter(module.type for module in self.modules)
+        lines.append(f"**Total Modules:** {len(self.modules)}")
+        lines.append("")
+        lines.append("| Type | Count |")
+        lines.append("|:-----|------:|")
+        for module_type in sorted(self.MODULE_TYPE_FOLDERS.values()):
+            count = counts.get(module_type, 0)
+            lines.append(f"| {module_type} | {count} |")
+        lines.append("")
+        
+        # Section 2: Dependency Graph (Mermaid)
+        lines.append("## Dependency Graph")
+        lines.append("")
+        
+        # Collect all dependency edges
+        edges: list[tuple[str, str]] = []
+        for module in self.modules:
+            if module.dependencies:
+                src_id = self._sanitize_mermaid_id(module.name)
+                for dep in module.dependencies:
+                    # Extract name from path if needed
+                    dep_name = dep.split("/")[-1] if "/" in dep else dep
+                    dst_id = self._sanitize_mermaid_id(dep_name)
+                    edges.append((src_id, dst_id))
+        
+        if edges:
+            lines.append("```mermaid")
+            lines.append("graph LR")
+            for src, dst in edges:
+                lines.append(f"  {src} --> {dst}")
+            lines.append("```")
+        else:
+            lines.append("*No dependencies defined between modules.*")
+        lines.append("")
+        
+        # Section 3: Modules Missing module.yaml
+        lines.append("## Modules Missing module.yaml")
+        lines.append("")
+        missing_yaml = [m for m in self.modules if not m.has_yaml]
+        if missing_yaml:
+            lines.append(f"**{len(missing_yaml)} modules** are missing `module.yaml` files:")
+            lines.append("")
+            for m in sorted(missing_yaml, key=lambda x: x.name):
+                lines.append(f"- `{m.path}` ({m.type})")
+        else:
+            lines.append("✅ All modules have `module.yaml` files.")
+        lines.append("")
+        
+        # Section 4: Orphaned Modules
+        lines.append("## Orphaned Modules")
+        lines.append("")
+        lines.append("*Modules with no dependencies and no dependents.*")
+        lines.append("")
+        orphans = self._get_orphaned_modules()
+        if orphans:
+            lines.append(f"**{len(orphans)} orphaned modules:**")
+            lines.append("")
+            for m in sorted(orphans, key=lambda x: x.name):
+                lines.append(f"- `{m.name}` ({m.type}) — `{m.path}`")
+        else:
+            lines.append("✅ No orphaned modules found.")
+        lines.append("")
+        
+        # Write report
+        try:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(report_path, "w") as f:
+                f.write("\n".join(lines))
+            
+            self.logger.info(f"Report generated: {report_path}")
+            return {
+                "success": True,
+                "report_path": str(report_path),
+                "total_modules": len(self.modules),
+                "missing_yaml_count": len(missing_yaml),
+                "orphan_count": len(orphans),
+                "dependency_edges": len(edges),
+            }
+        except OSError as e:
+            raise UnityModuleRegistryError(f"Failed to write report: {e}") from e
